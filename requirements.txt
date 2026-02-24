@@ -1,8 +1,9 @@
+fastapi
+uvicorn
+gunicorn
 tensorflow-cpu==2.12.0
 tensorflow-io==0.32.0
 numpy
 librosa
-matplotlib
-pandas
-scikit-learn
 soundfile
+python-multipart
