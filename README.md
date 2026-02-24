@@ -42,3 +42,7 @@ The final output is a `results.csv` file containing:
 ## Author
 
 Built as a deep learning audio classification project using TensorFlow.
+
+
+
+I added a requirements.txt so anyone can reproduce or deploy the project using pip install -r requirements.txt.
