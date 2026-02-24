@@ -1,31 +1,75 @@
 from fastapi import FastAPI, UploadFile, File
 import tensorflow as tf
-import numpy as np
 import librosa
-import io
+import numpy as np
+import tempfile
+import os
 
 app = FastAPI()
 
-# Load model (update path if needed)
-model = tf.keras.models.load_model("model")
+# Load trained model (make sure model.keras is in same folder)
+model = tf.keras.models.load_model("model.keras")
 
-def preprocess_audio(file):
-    audio_bytes = file.read()
-    audio, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
+# ---------- Audio Helpers ----------
 
-    spec = tf.signal.stft(audio, frame_length=320, frame_step=32)
-    spec = tf.abs(spec)
-    spec = tf.expand_dims(spec, axis=-1)
-    spec = tf.expand_dims(spec, axis=0)
+def load_mp3_16k_mono(filename):
+    audio_data, _ = librosa.load(filename, sr=16000, mono=True)
+    wav = tf.convert_to_tensor(audio_data, dtype=tf.float32)
+    return wav
 
-    return spec
+def preprocess_mp3(sample, index):
+    sample = sample[0]
+    zero_padding = tf.zeros([48000] - tf.shape(sample), dtype=tf.float32)
+    wav = tf.concat([zero_padding, sample], 0)
+
+    spectrogram = tf.signal.stft(wav, frame_length=320, frame_step=32)
+    spectrogram = tf.abs(spectrogram)
+    spectrogram = tf.expand_dims(spectrogram, axis=2)
+    return spectrogram
+
+# ---------- API ----------
+
+@app.get("/")
+def root():
+    return {"status": "Capuchin Detector API running"}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    data = preprocess_audio(file.file)
-    pred = model.predict(data)[0][0]
 
-    return {
-        "capuchin_probability": float(pred),
-        "capuchin_detected": bool(pred > 0.5)
-    }
+    # Save uploaded file temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        wav = load_mp3_16k_mono(tmp_path)
+
+        audio_slices = tf.keras.utils.timeseries_dataset_from_array(
+            wav,
+            wav,
+            sequence_length=48000,
+            sequence_stride=48000,
+            batch_size=1
+        )
+
+        audio_slices = audio_slices.map(preprocess_mp3)
+        audio_slices = audio_slices.batch(64)
+
+        preds = model.predict(audio_slices)
+
+        # Convert probabilities to 0/1
+        binary = [1 if p > 0.5 else 0 for p in preds]
+
+        # Post-processing (same logic as notebook)
+        from itertools import groupby
+        capuchin_calls = int(tf.reduce_sum(
+            [key for key, group in groupby(binary)]
+        ).numpy())
+
+        return {
+            "filename": file.filename,
+            "capuchin_calls": capuchin_calls
+        }
+
+    finally:
+        os.remove(tmp_path)
